@@ -1,0 +1,1 @@
+command: sh <libdir>run.sh <libdir>run.R -l <libdir> -c ${t cov} -n ${t bincov} -s ${t subsample} -b ${t binnum} -p ${t probcutoff}
