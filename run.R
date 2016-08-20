@@ -7,7 +7,7 @@ if (!exists('opt'))
         make_option(c("-n", "--bin.red"), type = "integer", help = "Fold increase in size of coverage bins"),
         make_option(c("-s", "--sub.sample.fold"), type = "integer", help = "Fold by which to sub-sample .cov file"),
         make_option(c("-b", "--bin.num"), type = "integer", default = 50, help = "Number of segments to evaluate per array"),
-        make_option(c("-p", "--prob.cutoff"), type = "integer", default = 0.01, help = "Cutoff purity ploidy probability value for inclusion in CN probability matrix"),
+        make_option(c("-p", "--prob.cutoff"), type = "double", default = 0.01, help = "Cutoff purity ploidy probability value for inclusion in CN probability matrix"),
         make_option(c("-o", "--outdir"), type = "character", default = './', help = "output directory"),
         make_option(c("-l", "--libdir"), type = "character", help = "Directory containing this R file")
 )
@@ -28,12 +28,15 @@ writeLines(paste(paste('--', names(opt), ' ', sapply(opt, function(x) paste(x, c
     saveRDS(opt, paste(opt$outdir, 'cmd.args.rds', sep = '/'))
 }
 
+message(paste0("cutoff is",opt$prob.cutoff))
+
 library(skitools)
 library(DNAcopy)
 library(data.table)
 library(pscl)
 library(gplots)
 library(d3heatmap)
+library(MASS)
 
 system(paste('mkdir -p', opt$outdir))
 
@@ -167,7 +170,7 @@ saveRDS(out, file = paste0(opt$outdir, "/PP_prob.Rds"))
 hm <- acast(out,ploidy~purity,value.var="prob")
 
 pdf(file = paste0(opt$outdir, '/PurityPloidy.pdf'), width = 12, height = 12)
-heatmap.2(hm,Colv=NA,Rowv=NA,scale="none",dendrogram="none",revC = TRUE, trace='none',key=FALSE,ylab = "Ploidy", xlab = "Purity",colsep = c(1:100),rowsep=c(1:100),sepwidth = c(0.001,0.001),sepcolor="black", main = paste0("SD = ", SD.MAP))
+heatmap.2(hm,Colv=NA,Rowv=NA,scale="none",dendrogram="none",revC = TRUE, trace='none',key=FALSE,ylab = "Ploidy", xlab = "Purity",colsep = c(1:100),rowsep=c(1:100),sepwidth = c(0.001,0.001),sepcolor="black", main = paste0("Sample ",gsub(".*/(.*)/.*","\\1",opt$cov), "\nSD = ", SD.MAP))
 dev.off()
 saveRDS(hm, file = paste0(opt$outdir, "/heatmap.Rds"))
 #wij(heatmap(hm,dendrogram=NULL,Rowv=FALSE,Colv=FALSE),filename=paste0(opt$outdir, '/PurityPloidy.html'))
@@ -178,8 +181,73 @@ setkeyv(out,c("purity", "ploidy"))
 setkeyv(CN.matrix,c("purity", "ploidy"))
 high.prob.CN.matrix <- merge(out, CN.matrix)
 CN<-high.prob.CN.matrix[,(exp(.SD)/rowSums(exp(.SD))), .SDcols = 8:18]
-CN.output <- cbind(high.prob.CN.matrix[,.(purity, ploidy, segment)], CN)
+CN.output <- cbind(high.prob.CN.matrix[,.(purity, ploidy, segment, prob)], CN)
 
 saveRDS(CN.output, file = paste0(opt$outdir, "/CN_matrix.Rds"))
+
+
+# Create granges object with segments and local alpha and beta
+# Make matrix with a column for histogram values for each segment
+
+# P(alpha) * P(K)
+# alpha (K* / K)
+## Create 2 column matrix now: P(alpha)P(k) and alpha(K*/K)
+
+
+# Create list before running loop
+# Not vectorized, definitely a faster way to do this
+segments <- unique(CN.output$segment)
+hist.list <- vector("list", length(segments))
+alpha.list <- vector("list", length(segments))
+beta.list <- vector("list", length(segments))
+for(z in 1:length(segments)){
+
+    combo_spec <- CN.output[segment==segments[z]]
+
+## Create 2 column matrix now: P(alpha)P(k) and alpha(K*/K)
+
+    num.CN = 10
+    my.list<-vector("list",num.CN)
+    for(i in 1:10){
+        prob <- rep(combo_spec$prob * combo_spec[[i + 5]], each = i)
+        loc <- c(t(do.call(base:::'%o%',list(combo_spec$purity, ((1:i) / i)))))
+        out <- cbind(prob, loc)
+        my.list[[i]] <- out
+    }
+
+    hist <- data.table(do.call(rbind, my.list))
+    hist[,prob2 := prob/sum(prob)]
+    hist.matrix = hist[, sample(loc, 10000, prob = prob2, replace = TRUE)]
+    beta = fitdistr(hist.matrix, dbeta, start = list(shape1 = 1, shape2 = 20))
+    hist.list[[z]] <- hist.matrix
+    alpha.list[[z]] <- beta$estimate[1]
+    beta.list[[z]] <- beta$estimate[2]
+    print(z)
+}
+
+hist.out <- data.table(do.call(cbind, hist.list))
+colnames(hist.out) <- as.character(segments)
+saveRDS(hist.out, file = paste0(opt$outdir, "/hist_all_seg.Rds"))
+
+alpha.out <- data.table(cbind(alpha.list))
+beta.out <- data.table(cbind(beta.list))
+alpha.beta <- cbind( segments, alpha.out, beta.out)
+setkey(alpha.beta, segments)
+
+setkey(x, segment)
+
+# Do this if you want ALL segments annotated with alpha and beta -> this produces NULL for segments that weren't subsampled if subsapmling was performed
+x <- alpha.beta[x]
+
+## #Do this if you want only segments with a non NULL alpha and beta
+## x <- x[alpha.beta]
+
+#Make sure when calling n here you referene the relevant opt$ in run.R
+seq.names <- as.data.table(table(x$chr))
+    #Create new grange table which is required for .segment function
+grange.out <- GRanges(seqnames = Rle(seq.names$V1, seq.names$N), ranges = IRanges(x$start,end=x$start+opt$bin.red*200-1,width=NULL,names=NULL), ratio = x$data, alpha = as.numeric(x$alpha.list), beta = as.numeric(x$beta.list), segment = as.numeric(x$segment))
+saveRDS(grange.out, file = paste0(opt$outdir, "/ab_grange.Rds"))
+
+
 
 message('done')
