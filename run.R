@@ -1,5 +1,7 @@
 ### Saturday, Aug 20, 2016 06:55:02 PM twalradt ####
 ### Heavily annotated version
+### File location: /gpfs/commons/groups/imielinski_lab/git/mskilab/flows/modules/PurityPloidy
+### Sample run: /gpfs/commons/home/twalradt/Flow/PurityPloidy
 ####################################################
 
 
@@ -291,6 +293,7 @@ for(z in 1:length(segments)){
 ### prob2 in hist is just prob normalized so it adds up to 1
 ### hist.matrix is a sample from hist.  You are drawing 10000 values from loc with replacement and the probability that each value is drawn from loc is given by prob2
 ### You then fit hist.matrix with a beta distribution using the fitdistr() function.  This is stochastic.  For more details see: http://varianceexplained.org/r/empirical_bayes_baseball/
+### More magic about how Marcin got this working in this file: /gpfs/commons/home/twalradt/R-CN_hist_notes
     
     hist <- data.table(do.call(rbind, my.list))
     hist[,prob2 := prob/sum(prob)]
